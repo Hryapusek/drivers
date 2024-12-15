@@ -28,7 +28,7 @@ NTSTATUS ConfigureSerialPort(USHORT PortBase)
 
     // Set the baud rate - Divisor Latch Access Bit (DLAB = 1)
     WRITE_PORT_UCHAR(PortBase + 3, 0x80);  // Enable DLAB
-    divisor = 1; // Example divisor for 9600 baud rate
+    divisor = 1; // Example divisor for 115600 baud rate
     WRITE_PORT_UCHAR(PortBase, divisor);   // Set LSB of divisor
     WRITE_PORT_UCHAR(PortBase + 1, divisor); // Set MSB of divisor
 
@@ -80,7 +80,7 @@ NTSTATUS WaitForTransmitterReady()
 }
 
 // Write data to the serial port
-VOID CustomIoWrite(
+NTSTATUS CustomIoWrite(
     __in PDEVICE_OBJECT DeviceObject,
     __in PIRP Irp,
     __in size_t Length
@@ -96,16 +96,14 @@ VOID CustomIoWrite(
     // Check that Length is valid and non-zero
     if (Length == 0) {
         DbgPrint("CustomIoWrite: Invalid length 0\n");
-        WdfRequestComplete(Irp, STATUS_INVALID_PARAMETER);
-        return;
+        return STATUS_INVALID_PARAMETER;
     }
 
     // Retrieve the input buffer from the IRP (this is the user data sent to the driver)
     buffer = Irp->AssociatedIrp.SystemBuffer;
     if (buffer == NULL) {
         DbgPrint("CustomIoWrite: Buffer is NULL\n");
-        WdfRequestComplete(Irp, STATUS_INVALID_PARAMETER);
-        return;
+        return STATUS_INVALID_PARAMETER;
     }
 
     // Start sending bytes one by one to the serial port
@@ -116,8 +114,7 @@ VOID CustomIoWrite(
         status = WaitForTransmitterReady();
         if (!NT_SUCCESS(status)) {
             DbgPrint("CustomIoWrite: Transmitter not ready. Status: 0x%x\n", status);
-            WdfRequestComplete(Irp, status);
-            return;
+            return status;
         }
 
         // Send the byte to the serial port (COM2 for example)
@@ -138,7 +135,7 @@ NTSTATUS DeviceIoControlHandler(
 {
     PDEVICE_EXTENSION deviceExtension = (PDEVICE_EXTENSION)DeviceObject->DeviceExtension;
     PIO_STACK_LOCATION ioStack = IoGetCurrentIrpStackLocation(Irp);
-    NTSTATUS status = STATUS_INVALID_DEVICE_REQUEST;
+    NTSTATUS status = STATUS_SUCCESS;
     ULONG bytesToCopy = 0;
 
     // Check if the correct IOCTL code was used
@@ -154,23 +151,17 @@ NTSTATUS DeviceIoControlHandler(
             bytesToCopy, bytesToCopy, deviceExtension->DataBuffer);
 
         // Pass data to the serial port write function
-        CustomIoWrite(DeviceObject, Irp, bytesToCopy);
+        status = CustomIoWrite(DeviceObject, Irp, bytesToCopy);
     } else {
-        DbgPrint("DeviceIoControlHandler: Invalid IOCTL code\n");
-        status = STATUS_INVALID_DEVICE_REQUEST;
+        DbgPrint("DeviceIoControlHandler: Unknown IOCTL code\n");
     }
 
-    status = STATUS_SUCCESS;
-
-    // Inform the caller of the result and completion
     Irp->IoStatus.Information = bytesToCopy;
     Irp->IoStatus.Status = status;
     IoCompleteRequest(Irp, IO_NO_INCREMENT); // Complete the IRP request
 
-    return status;
+    return STATUS_SUCCESS;
 }
-
-
 
 // Create or close the device (dummy handler)
 NTSTATUS CreateCloseHandler(
